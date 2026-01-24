@@ -1,0 +1,223 @@
+#include <iostream>
+#include <vector>
+#include <pthread.h>
+#include "Process.h"
+#include "Scheduler.h"
+#include "ProducerConsumer.h"
+#include "BankersAlgorithm.h"
+
+using namespace std;
+
+// Global shared buffer for producer-consumer
+SharedBuffer sharedBuffer;
+
+// Global list to store manually added processes
+vector<Process> manualProcesses;
+
+void displayMenu() {
+    cout << "\n╔════════════════════════════════════════╗" << endl;
+    cout << "║   MINI OS SIMULATOR - MAIN MENU       ║" << endl;
+    cout << "╠════════════════════════════════════════╣" << endl;
+    cout << "║  1. Start Simulation                   ║" << endl;
+    cout << "║  2. Add Process Manually               ║" << endl;
+    cout << "║  3. Display System State               ║" << endl;
+    cout << "║  4. Exit                               ║" << endl;
+    cout << "╚════════════════════════════════════════╝" << endl;
+    cout << "Enter your choice: ";
+}
+
+void startSimulation() {
+    cout << "\n========================================" << endl;
+    cout << "   STARTING OS SIMULATION" << endl;
+    cout << "========================================\n" << endl;
+    
+    // Initialize buffer
+    initializeBuffer(&sharedBuffer);
+    
+    // Create producer and consumer threads
+    pthread_t producers[2], consumerThread;
+    
+    cout << "Creating 2 Producer threads and 1 Consumer thread...\n" << endl;
+    
+    // Create 2 producer threads
+    for (int i = 0; i < 2; i++) {
+        pthread_create(&producers[i], NULL, producer, (void*)&sharedBuffer);
+    }
+    
+    // Create 1 consumer thread
+    pthread_create(&consumerThread, NULL, consumer, (void*)&sharedBuffer);
+    
+    // Wait for producers to finish
+    for (int i = 0; i < 2; i++) {
+        pthread_join(producers[i], NULL);
+    }
+    
+    // Signal consumer that production is done
+    sharedBuffer.producerDone = true;
+    
+    // Post to full semaphore to wake up consumer if it's waiting
+    sem_post(&sharedBuffer.full);
+    
+    // Wait for consumer to finish
+    void* result;
+    pthread_join(consumerThread, &result);
+    
+    // Get the process list from consumer
+    vector<Process>* processList = (vector<Process>*)result;
+    
+    // MERGE manually added processes with producer-created processes
+    cout << "\n→ Merging processes:" << endl;
+    cout << "  - Producer-created processes: " << processList->size() << endl;
+    cout << "  - Manually added processes: " << manualProcesses.size() << endl;
+    
+    // Add manual processes to the list
+    for (const auto& p : manualProcesses) {
+        processList->push_back(p);
+    }
+    
+    cout << "  - Total processes to schedule: " << processList->size() << endl;
+    
+    if (processList->empty()) {
+        cout << "\nNo processes to schedule!" << endl;
+        delete processList;
+        destroyBuffer(&sharedBuffer);
+        return;
+    }
+    
+    cout << "\n========================================" << endl;
+    cout << "   PART A: SCHEDULING" << endl;
+    cout << "========================================" << endl;
+    
+    // Create scheduler and schedule processes
+    Scheduler scheduler;
+    scheduler.scheduleProcesses(*processList);
+    
+    cout << "\n========================================" << endl;
+    cout << "   PART C: BANKER'S ALGORITHM" << endl;
+    cout << "========================================" << endl;
+    
+    // Initialize Banker's Algorithm with 3 resource types
+    BankersAlgorithm banker(3);
+    
+    // Set available resources (example: 10 of each type)
+    vector<int> availableResources = {10, 10, 10};
+    banker.setAvailableResources(availableResources);
+    
+    // Check safety
+    if (banker.isSafe(*processList)) {
+        banker.displaySafeSequence();
+    } else {
+        banker.displayBlockedProcesses();
+    }
+    
+    // Cleanup
+    delete processList;
+    destroyBuffer(&sharedBuffer);
+    
+    // Clear manual processes after simulation
+    manualProcesses.clear();
+    
+    cout << "\n========================================" << endl;
+    cout << "   SIMULATION COMPLETED" << endl;
+    cout << "========================================\n" << endl;
+}
+
+void addProcessManually() {
+    Process p;
+    
+    cout << "\n========== ADD PROCESS MANUALLY ==========\n";
+    cout << "Enter Process ID: ";
+    cin >> p.pid;
+    
+    cout << "Enter Arrival Time: ";
+    cin >> p.arrivalTime;
+    
+    cout << "Enter Burst Time: ";
+    cin >> p.burstTime;
+    p.remainingTime = p.burstTime;
+    
+    cout << "Enter Priority (1-5, lower is higher priority): ";
+    cin >> p.priority;
+    
+    cout << "Enter Resource Requirements (3 types):\n";
+    p.maxNeed.resize(3);
+    for (int i = 0; i < 3; i++) {
+        cout << "  Resource " << (i + 1) << ": ";
+        cin >> p.maxNeed[i];
+    }
+    
+    p.allocation = {0, 0, 0};
+    p.remainingNeed = p.maxNeed;
+    
+    // Store in global list
+    manualProcesses.push_back(p);
+    
+    cout << "\nProcess P" << p.pid << " added successfully!" << endl;
+    cout << "  Arrival: " << p.arrivalTime << endl;
+    cout << "  Burst: " << p.burstTime << endl;
+    cout << "  Priority: " << p.priority << endl;
+    cout << "  Max Need: [" << p.maxNeed[0] << ", " << p.maxNeed[1] << ", " << p.maxNeed[2] << "]" << endl;
+}
+
+void displaySystemState() {
+    cout << "\n========== CURRENT SYSTEM STATE ==========\n";
+    cout << "Buffer Size: " << BUFFER_SIZE << endl;
+    cout << "Number of Resource Types: 3" << endl;
+    cout << "Manually Added Processes: " << manualProcesses.size() << endl;
+    
+    if (!manualProcesses.empty()) {
+        cout << "\nManual Process List:" << endl;
+        for (const auto& p : manualProcesses) {
+            cout << "  P" << p.pid << " - Arrival: " << p.arrivalTime 
+                 << ", Burst: " << p.burstTime << ", Priority: " << p.priority << endl;
+        }
+    }
+    
+    cout << "\nScheduling Algorithms:" << endl;
+    cout << "  - Priority Scheduling (≤ 5 processes)" << endl;
+    cout << "  - Round Robin (> 5 processes, Quantum = 2)" << endl;
+    
+    cout << "\nSynchronization:" << endl;
+    cout << "  - Semaphores: empty, full" << endl;
+    cout << "  - Mutex: buffer access control" << endl;
+    
+    cout << "\nDeadlock Prevention:" << endl;
+    cout << "  - Banker's Algorithm (Safety Check)" << endl;
+    cout << "==========================================" << endl;
+}
+
+int main() {
+    int choice;
+    
+    cout << "\n╔════════════════════════════════════════╗" << endl;
+    cout << "║  WELCOME TO MINI OS SIMULATOR         ║" << endl;
+    cout << "║                                        ║" << endl;
+    cout << "║  • Part A: Process Scheduling         ║" << endl;
+    cout << "║  • Part B: Producer-Consumer          ║" << endl;
+    cout << "║  • Part C: Banker's Algorithm         ║" << endl;
+    cout << "╚════════════════════════════════════════╝" << endl;
+    
+    do {
+        displayMenu();
+        cin >> choice;
+        
+        switch (choice) {
+            case 1:
+                startSimulation();
+                break;
+            case 2:
+                addProcessManually();
+                break;
+            case 3:
+                displaySystemState();
+                break;
+            case 4:
+                cout << "\n👋 Exiting simulator. Goodbye!\n" << endl;
+                break;
+            default:
+                cout << "\n❌ Invalid choice! Please try again.\n" << endl;
+        }
+    } while (choice != 4);
+    
+    return 0;
+}
